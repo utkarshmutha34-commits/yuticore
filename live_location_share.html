@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Location Share</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<style>
+  :root{
+    --bg: #0b1220;
+    --panel: #121b2e;
+    --accent: #22d3a5;
+    --text: #e7edf5;
+    --muted: #8fa0b8;
+    --danger: #ff6b6b;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+  }
+  header{
+    padding: 16px 20px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  header h1{ margin:0 0 4px; font-size: 1.15rem; }
+  header p{ margin:0; color: var(--muted); font-size: 0.8rem; }
+
+  .role-screen{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    gap:14px;
+    padding: 24px;
+  }
+  .role-btn{
+    padding: 18px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: var(--panel);
+    color: var(--text);
+    text-align:left;
+    cursor:pointer;
+  }
+  .role-btn b{ display:block; font-size:1rem; margin-bottom:4px; color: var(--accent); }
+  .role-btn span{ color: var(--muted); font-size: 0.82rem; }
+
+  .code-row{
+    display:flex;
+    gap:8px;
+    padding: 0 24px 20px;
+  }
+  .code-row input{
+    flex:1;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+
+  #map{ flex: 1; min-height: 300px; width: 100%; display:none; }
+
+  .panel{
+    background: var(--panel);
+    padding: 14px 20px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    display:none;
+  }
+  .status-row{ display:flex; align-items:center; gap:10px; margin-bottom: 12px; }
+  .dot{ width:10px; height:10px; border-radius:50%; background: var(--muted); flex-shrink:0; }
+  .dot.live{ background: var(--accent); animation: pulse 1.6s infinite; }
+  .dot.error{ background: var(--danger); }
+  @keyframes pulse{
+    0%{ box-shadow: 0 0 0 0 rgba(34,211,165,0.5); }
+    70%{ box-shadow: 0 0 0 10px rgba(34,211,165,0); }
+    100%{ box-shadow: 0 0 0 0 rgba(34,211,165,0); }
+  }
+  #statusText{ font-size:0.85rem; }
+  .grid{ display:grid; grid-template-columns: repeat(2,1fr); gap:10px; }
+  .stat{ background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); border-radius:8px; padding:9px 11px; }
+  .stat .label{ font-size:0.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:3px; }
+  .stat .value{ font-size:0.9rem; font-variant-numeric: tabular-nums; }
+
+  .code-display{
+    text-align:center;
+    padding: 10px;
+    margin: 0 20px 14px;
+    border: 1px dashed rgba(255,255,255,0.2);
+    border-radius: 8px;
+    font-size: 1.4rem;
+    letter-spacing: 3px;
+    font-weight: 700;
+    color: var(--accent);
+    display:none;
+  }
+  .note{ margin-top:10px; font-size:0.72rem; color:var(--muted); line-height:1.4; padding: 0 20px 16px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Live Location Share</h1>
+  <p>Research demo — Smart Tourist Safety System</p>
+</header>
+
+<div class="role-screen" id="roleScreen">
+  <button class="role-btn" id="btnTourist">
+    <b>I'm the Tourist</b>
+    <span>Share my live location from this device</span>
+  </button>
+  <button class="role-btn" id="btnViewer">
+    <b>I'm the Viewer</b>
+    <span>Watch someone else's shared live location</span>
+  </button>
+</div>
+
+<div class="code-display" id="codeDisplay"></div>
+
+<div class="code-row" id="codeRow" style="display:none;">
+  <input type="text" id="codeInput" placeholder="Enter 4-digit share code" maxlength="4" inputmode="numeric">
+  <button class="role-btn" id="btnJoin" style="padding:12px 18px;">Watch</button>
+</div>
+
+<div id="map"></div>
+
+<div class="panel" id="panel">
+  <div class="status-row">
+    <div class="dot" id="statusDot"></div>
+    <div id="statusText">Starting…</div>
+  </div>
+  <div class="grid">
+    <div class="stat"><div class="label">Latitude</div><div class="value" id="lat">—</div></div>
+    <div class="stat"><div class="label">Longitude</div><div class="value" id="lng">—</div></div>
+    <div class="stat"><div class="label">Accuracy</div><div class="value" id="acc">—</div></div>
+    <div class="stat"><div class="label">Last update</div><div class="value" id="time">—</div></div>
+  </div>
+  <div class="note" id="noteText"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+  let map, marker, accCircle;
+  let watchId = null;
+  let pollId = null;
+  let shareCode = null;
+
+  const roleScreen = document.getElementById('roleScreen');
+  const codeDisplay = document.getElementById('codeDisplay');
+  const codeRow = document.getElementById('codeRow');
+  const codeInput = document.getElementById('codeInput');
+  const mapEl = document.getElementById('map');
+  const panel = document.getElementById('panel');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const latEl = document.getElementById('lat');
+  const lngEl = document.getElementById('lng');
+  const accEl = document.getElementById('acc');
+  const timeEl = document.getElementById('time');
+  const noteText = document.getElementById('noteText');
+
+  function initMap(lat, lng){
+    mapEl.style.display = 'block';
+    map = L.map('map').setView([lat, lng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    marker = L.circleMarker([lat, lng], { radius: 8, color: '#22d3a5', fillColor: '#22d3a5', fillOpacity: 1, weight: 2 }).addTo(map);
+    accCircle = L.circle([lat, lng], { radius: 30, color: '#22d3a5', fillColor: '#22d3a5', fillOpacity: 0.1, weight: 1 }).addTo(map);
+  }
+
+  function updateMapPoint(lat, lng, accuracy){
+    if(!map) initMap(lat, lng);
+    else {
+      marker.setLatLng([lat, lng]);
+      accCircle.setLatLng([lat, lng]);
+      if(accuracy) accCircle.setRadius(accuracy);
+      map.panTo([lat, lng]);
+    }
+  }
+
+  // ---------- TOURIST ROLE ----------
+  function startTourist(){
+    shareCode = String(Math.floor(1000 + Math.random() * 9000));
+    codeDisplay.textContent = shareCode;
+    codeDisplay.style.display = 'block';
+    panel.style.display = 'block';
+    noteText.textContent = 'Give this code to whoever should see your location. Location stays live only while this page is open.';
+
+    if(!navigator.geolocation){
+      statusText.textContent = 'Geolocation not supported on this browser.';
+      statusDot.className = 'dot error';
+      return;
+    }
+
+    statusText.textContent = 'Requesting location permission…';
+
+    watchId = navigator.geolocation.watchPosition(async (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      updateMapPoint(latitude, longitude, accuracy);
+      latEl.textContent = latitude.toFixed(6);
+      lngEl.textContent = longitude.toFixed(6);
+      accEl.textContent = Math.round(accuracy) + ' m';
+      timeEl.textContent = new Date(pos.timestamp).toLocaleTimeString();
+      statusDot.className = 'dot live';
+      statusText.textContent = 'Live — sharing this device\'s location.';
+
+      try{
+        await window.storage.set('loc:' + shareCode, JSON.stringify({
+          lat: latitude, lng: longitude, accuracy, ts: pos.timestamp
+        }), true);
+      }catch(e){
+        console.error('Storage error', e);
+      }
+    }, (err) => {
+      statusDot.className = 'dot error';
+      statusText.textContent = 'Location error: ' + (err.message || 'unknown');
+    }, { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 });
+  }
+
+  // ---------- VIEWER ROLE ----------
+  function startViewer(code){
+    shareCode = code;
+    panel.style.display = 'block';
+    noteText.textContent = 'Watching share code ' + code + '. Updates automatically every few seconds.';
+    statusText.textContent = 'Waiting for the first location update…';
+
+    pollId = setInterval(async () => {
+      try{
+        const result = await window.storage.get('loc:' + shareCode, true);
+        if(result && result.value){
+          const data = JSON.parse(result.value);
+          updateMapPoint(data.lat, data.lng, data.accuracy);
+          latEl.textContent = data.lat.toFixed(6);
+          lngEl.textContent = data.lng.toFixed(6);
+          accEl.textContent = Math.round(data.accuracy) + ' m';
+          timeEl.textContent = new Date(data.ts).toLocaleTimeString();
+          statusDot.className = 'dot live';
+          statusText.textContent = 'Live — showing shared location.';
+        }
+      }catch(e){
+        statusDot.className = 'dot error';
+        statusText.textContent = 'No location found yet for this code.';
+      }
+    }, 3000);
+  }
+
+  document.getElementById('btnTourist').addEventListener('click', () => {
+    roleScreen.style.display = 'none';
+    startTourist();
+  });
+
+  document.getElementById('btnViewer').addEventListener('click', () => {
+    roleScreen.style.display = 'none';
+    codeRow.style.display = 'flex';
+  });
+
+  document.getElementById('btnJoin').addEventListener('click', () => {
+    const code = codeInput.value.trim();
+    if(code.length === 4){
+      codeRow.style.display = 'none';
+      startViewer(code);
+    }
+  });
+</script>
+
+</body>
+</html>
