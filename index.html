@@ -154,14 +154,46 @@
   // broker over WebSockets — free, no signup, no keys, nothing to create
   // or paste in. It just works, on every load, forever.
   const TOPIC_PREFIX = 'smart-tourist-safety-demo/';
-  const mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+  const clientId = 'sts-' + Math.random().toString(16).slice(2);
+  const mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+    clientId,
+    clean: true,
+    reconnectPeriod: 2000,
+    connectTimeout: 10000
+  });
+
+  let mqttReady = false;
+
+  mqttClient.on('connect', () => {
+    mqttReady = true;
+    if(typeof onMqttStatus === 'function') onMqttStatus('connected');
+  });
+  mqttClient.on('reconnect', () => {
+    mqttReady = false;
+    if(typeof onMqttStatus === 'function') onMqttStatus('connecting');
+  });
+  mqttClient.on('close', () => {
+    mqttReady = false;
+    if(typeof onMqttStatus === 'function') onMqttStatus('disconnected');
+  });
+  mqttClient.on('error', (err) => {
+    console.error('MQTT error', err);
+    if(typeof onMqttStatus === 'function') onMqttStatus('error');
+  });
+
+  // Set by the app once role/UI elements exist, so connection events can
+  // update the on-screen status text.
+  let onMqttStatus = null;
 
   function mqttPublish(code, payload){
-    mqttClient.publish(TOPIC_PREFIX + code, JSON.stringify(payload));
+    // retain:true means a viewer who joins *after* this was sent still
+    // immediately receives the last known location instead of waiting
+    // for the next GPS fix.
+    mqttClient.publish(TOPIC_PREFIX + code, JSON.stringify(payload), { qos: 1, retain: true });
   }
 
   function mqttSubscribe(code, onMessage){
-    mqttClient.subscribe(TOPIC_PREFIX + code);
+    mqttClient.subscribe(TOPIC_PREFIX + code, { qos: 1 });
     mqttClient.on('message', (topic, message) => {
       if(topic === TOPIC_PREFIX + code){
         try{ onMessage(JSON.parse(message.toString())); }
@@ -217,13 +249,21 @@
     panel.style.display = 'block';
     noteText.textContent = 'Give this code to whoever should see your location. Location stays live only while this page is open.';
 
+    onMqttStatus = (state) => {
+      if(state === 'connecting') statusText.textContent = 'Connecting to relay…';
+      if(state === 'error') statusText.textContent = 'Relay connection error — retrying automatically.';
+      if(state === 'disconnected') statusText.textContent = 'Relay disconnected — retrying automatically.';
+      // 'connected' is intentionally not overwritten here so it doesn't
+      // fight with the "Live — sharing…" text once GPS fixes start.
+    };
+
     if(!navigator.geolocation){
       statusText.textContent = 'Geolocation not supported on this browser.';
       statusDot.className = 'dot error';
       return;
     }
 
-    statusText.textContent = 'Requesting location permission…';
+    statusText.textContent = mqttReady ? 'Requesting location permission…' : 'Connecting to relay…';
 
     watchId = navigator.geolocation.watchPosition(async (pos) => {
       const { latitude, longitude, accuracy } = pos.coords;
@@ -247,7 +287,14 @@
     shareCode = code;
     panel.style.display = 'block';
     noteText.textContent = 'Watching share code ' + code + '. Updates appear the moment the tourist device sends them.';
-    statusText.textContent = 'Waiting for the first location update…';
+    statusText.textContent = mqttReady ? 'Waiting for the first location update…' : 'Connecting to relay…';
+
+    onMqttStatus = (state) => {
+      if(state === 'connecting') statusText.textContent = 'Connecting to relay…';
+      if(state === 'error') statusText.textContent = 'Relay connection error — retrying automatically.';
+      if(state === 'disconnected') statusText.textContent = 'Relay disconnected — retrying automatically.';
+      if(state === 'connected') statusText.textContent = 'Connected — waiting for a location update…';
+    };
 
     mqttSubscribe(code, (data) => {
       updateMapPoint(data.lat, data.lng, data.accuracy);
